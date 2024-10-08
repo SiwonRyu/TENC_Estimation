@@ -8,15 +8,9 @@ struct two_matrices {
 
 
 function compute_SE(IF, q){
-// 	struct two_matrices scalar res
-	
 	M = rows(IF)
 	Avar = q*IF'*IF/(M-1)
 	SE = diagonal(sqrt(Avar/M))
-	
-// 	res.Matrix1 = Avar/M
-// 	res.Matrix2 = SE
-	
 	return(Avar/M)
 }
 
@@ -64,15 +58,19 @@ real matrix compute_decomp(b,z,x,N){
 	pi2 = N*b[4]*x[2]
 	pi3 = (b[3]-b[4])*z[1]
 	pi4 = b[3]*x[3]
-	pi = (pi1\pi2\pi3\pi4)
+	piD = pi1+pi2
+	piI = pi3+pi4
+	pi = (pi1\pi2\piD\pi3\pi4\piI)
 	return(pi)
 }
 real matrix compute_IF_decomp(b,z,x,N,IF_b,IF_z,IF_x){
 	IF_pi1 = IF_b[,2]
 	IF_pi2 = N*(b[4]*IF_x[,2] + IF_b[,4]*x[2])
+	IF_piD = IF_pi1 + IF_pi2
 	IF_pi3 = (IF_b[,3]-IF_b[,4])*z[1] + (b[3]-b[4])*IF_z[,1]
 	IF_pi4 = IF_b[,3]*x[3] + b[3]*IF_x[,3]
-	IF_pi = (IF_pi1, IF_pi2, IF_pi3, IF_pi4)
+	IF_piI = IF_pi3 + IF_pi4
+	IF_pi = (IF_pi1, IF_pi2, IF_piD, IF_pi3, IF_pi4, IF_piI)
 	return(IF_pi)
 }
 
@@ -189,7 +187,8 @@ qui{
 	gen S_tmp 		= A_hat_tmp
 	
 	local W iota Di_tmp Dj_tmp Dij_tmp
-
+	unique g
+	local M = r(sum)
 	local vn = 0
 	foreach v in `W'{
 		local ++vn
@@ -198,10 +197,12 @@ qui{
 		gen DS`vn'_tmp = `v'
 	}
 	preserve
-		collapse (sum) Q_tmp R_tmp S_tmp DQ*_tmp DR*_tmp DS*_tmp, by(g i)
+		collapse (sum) Q_tmp R_tmp S_tmp DQ*_tmp DR*_tmp DS*_tmp, by(g i)	
 		save `savenm', replace
 	restore
 	for any iota Di_tmp Dj_tmp Dij_tmp Q_tmp R_tmp S_tmp A_hat_tmp DQ*_tmp DR*_tmp DS*_tmp: cap drop X
+	
+	
 }
 end
 
@@ -228,7 +229,7 @@ end
 cap program drop estim_RE
 program estim_RE, eclass
 
-syntax varlist (min = 4)
+syntax varlist (min = 4) [,cl_g cl_i]
 tokenize `varlist'
 local Y  `1'
 local D  `2'
@@ -237,10 +238,23 @@ local R  `4'
 macro shift 4
 local regressors `*'
 
+/* Set clustering group and run dyadic regression */	
+local cluster_g = "`cl_g'" != ""
+local cluster_i = "`cl_i'" != ""
+
+if `cluster_g' == 1{
+	local cl g
+}
+else if `cluster_i' == 1{
+	local cl i
+}
+else{
+	local cl 
+}
 
 cap gen iota = 1
 local Z iota `D' `Q' `R'
-qui reg `Y' `Z' `regressors', noc
+noi reg `Y' `Z' `regressors', noc cluster(`cl' )
 mat beta_RE = e(b)
 mat beta_RE = beta_RE[1,1..4]
 
@@ -255,8 +269,11 @@ mata{
 }
 cap drop 	Zr_tmp* 
 getmata 	Zr_tmp_* = Zr
+
+
+
 preserve
-	collapse (sum) Zr_tmp_*, by( g )
+	collapse (sum) Zr_tmp_*, by( `cl' )
 	mata: Zr_cl = st_data(.,("Zr_tmp_*"))
 restore
 
@@ -268,7 +285,7 @@ q = ((N-1)/(N-K))
 M = rows(Zr_cl)
 
 /* Influence of beta without adjustment */
-IF_Y1 		= compute_IF(Z, Zr_cl)
+IF_beta_RE		= compute_IF(Z, Zr_cl)
 
 /* Standard error adjustment for beta*/
 Dq 			= st_data(.,"DQ*_tmp")
@@ -276,22 +293,22 @@ Dr 			= st_data(.,"DR*_tmp")
 beta_RE 	= st_matrix("beta_RE")'
 zeta1 		= st_matrix("zeta1")
 
+
 Diff_Zb  	= beta_RE[3]:*Dq + beta_RE[4]:*Dr
-IF_adj  	= -(invsym(Z'*Z/M)*((Z'*Diff_Zb )/M)*IF_A1'/M)'
-IF_beta_RE 	= IF_Y1 + IF_adj
-Vhat_RE 	= compute_SE(IF_beta_RE,q)
+IF_adj  	= -(invsym(Z'*Z/M)*((Z'*Diff_Zb )/M)*IF_A1')'
+IF_beta_adj = IF_beta_RE + IF_adj
+Vhat_RE 	= compute_SE(IF_beta_adj,q)
 
 /* Compute SE of the decomposition */
 res_pi = est_pi(beta_RE, zeta1, zeta1, NN, IF_beta_RE,IF_A1,IF_A1,q)
 
-
 st_matrix("V_beta_RE", Vhat_RE)
 st_matrix("pi_RE", res_pi[,1]')
-st_matrix("V_pi_RE", res_pi[,2..5]')
+st_matrix("V_pi_RE", res_pi[,2..7]')
 }
 
 est_display beta_RE V_beta_RE, names(`Z')
-est_display pi_RE V_pi_RE, names(Direct_Treatment Direct_Network Indirect_Treatment Indirect_Network)
+est_display pi_RE V_pi_RE, names(Direct_Treatment Direct_Network Direct Indirect_Treatment Indirect_Network Indirect)
 end
 
 
@@ -300,7 +317,7 @@ end
 cap program drop estim_PT
 program estim_PT, eclass
 
-syntax varlist (min = 4)
+syntax varlist (min = 4) [,cl_g cl_i]
 tokenize `varlist'
 local DY  `1'
 local D  `2'
@@ -309,9 +326,23 @@ local RS  `4'
 macro shift 4
 local regressors `*'
 
+/* Set clustering group and run dyadic regression */	
+local cluster_g = "`cl_g'" != ""
+local cluster_i = "`cl_i'" != ""
+
+if `cluster_g' == 1{
+	local cl g
+}
+else if `cluster_i' == 1{
+	local cl i
+}
+else{
+	local cl 
+}
+
 cap gen iota = 1
 local X iota `D' `Q' `RS' 
-qui reg `DY' `X' `regressors', noc r 
+noi reg `DY' `X' `regressors', noc r 
 mat beta_PT = e(b)
 mat beta_PT = beta_PT[1,1..4]
 
@@ -329,7 +360,7 @@ cap drop Xe_tmp*
 getmata Xe_tmp_* = Xe
 
 preserve
-	collapse (sum) Xe_tmp_*, by( g )
+	collapse (sum) Xe_tmp_*, by( `cl' )
 	mata: Xe_cl = st_data(.,("Xe_tmp_*"))
 restore
 
@@ -339,35 +370,36 @@ N = rows(X)
 K = cols(X)
 q = ((N-1)/(N-K)) 
 M = rows(Xe_cl)
-IF_DY = compute_IF(X, Xe_cl)
+
+IF_beta_PT 	= compute_IF(X, Xe_cl)
 
 /* Standard error adjustment */
-Dq 		= st_data(.,"DQ*_tmp")
-Dr 		= st_data(.,"DR*_tmp")
-Ds 		= st_data(.,"DS*_tmp")
-beta_PT = st_matrix("beta_PT")'
-zeta1 	= st_matrix("zeta1")
-zeta0 	= st_matrix("zeta0")
-xi 		= st_matrix("xi") 
+Dq 			= st_data(.,"DQ*_tmp")
+Dr 			= st_data(.,"DR*_tmp")
+Ds 			= st_data(.,"DS*_tmp")
+beta_PT 	= st_matrix("beta_PT")'
+zeta1 		= st_matrix("zeta1")
+zeta0 		= st_matrix("zeta0")
+xi 			= st_matrix("xi") 
 
 Diff_Zb1 = beta_PT[3]:*Dq + beta_PT[4]:*Dr
 Diff_Zb0 = beta_PT[4]:*Ds
 
-IF_adj1 = -(invsym(X'*X/M)*((X'*Diff_Zb1)/M)*IF_A1'/M)'
-IF_adj0 = -(invsym(X'*X/M)*((X'*Diff_Zb0)/M)*IF_A0'/M)'
+IF_adj1 = -(invsym(X'*X/M)*((X'*Diff_Zb1)/M)*IF_A1')'
+IF_adj0 = -(invsym(X'*X/M)*((X'*Diff_Zb0)/M)*IF_A0')'
 
-IF_beta_PT 	= IF_DY + IF_adj1 - IF_adj0
-Vhat_PT 	= compute_SE(IF_beta_PT,q)/M
+IF_beta_adj = IF_beta_PT + IF_adj1 - IF_adj0
+Vhat_PT 	= compute_SE(IF_beta_adj,q)/M
 
-res_pi = est_pi(beta_PT, zeta1, xi, NN, IF_beta_PT,IF_A1,IF_DA,q)
+res_pi = est_pi(beta_PT, zeta1, xi, NN, IF_beta_adj,IF_A1,IF_DA,q)
 
 st_matrix("V_beta_PT", Vhat_PT)
 st_matrix("pi_PT", res_pi[,1]')
-st_matrix("V_pi_PT", res_pi[,2..5]')
+st_matrix("V_pi_PT", res_pi[,2..7]')
 }
 
 est_display beta_PT V_beta_PT, names(`X')
-est_display pi_PT V_pi_PT, names(Direct_Treatment Direct_Network Indirect_Treatment Indirect_Network)
+est_display pi_PT V_pi_PT, names(Direct_Treatment Direct_Network Direct Indirect_Treatment Indirect_Network Indirect)
 
 end
 

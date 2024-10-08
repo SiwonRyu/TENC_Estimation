@@ -20,6 +20,7 @@ qui{
 	gen 	Dij 	= Di*Dj
 	gen 	DipDj 	= Di+Dj
 	egen 	DimDj 	= rowmax(Di Dj) 
+	tab g, generate(gdum)
 
 	/* Drop self link */
 	drop if i == j
@@ -40,11 +41,13 @@ qui{
 	}
 }
 
-reg_dyadic A0 Di Dj, cov(${controls}) idx(g i j) cl_g
+local cl cl_g
+
+reg_dyadic A0 Di Dj, cov() idx(g i j) `cl'
 mat zeta0 = e(b)'
-reg_dyadic A1 Di Dj, idx(g i j) cl_g
+reg_dyadic A1 Di Dj, cov() idx(g i j) `cl'
 mat zeta1 = e(b)'
-reg_dyadic DA Di Dj, idx(g i j) cl_g
+reg_dyadic DA Di Dj, cov() idx(g i j) `cl'
 mat xi = e(b)'
 
 preserve
@@ -63,7 +66,7 @@ compute_QRS A0_hat Di Dj, savenm(Z0_tmp)
 
 /* Outcome Regression */
 qui{
-	mata: NN = 20 /* counterfactual number of neighbors */
+	mata: NN = 19 /* counterfactual number of neighbors */
 	use individual_dataset_ComolaPrina.dta, clear
 
 	/* Set Indices */
@@ -79,34 +82,27 @@ qui{
 	drop _merge
 
 	gen YD = y1 > 0
-	gen Y1 = y1
-	gen lY1e = log(y1)
-	gen lY1 = log(y1+1)
-	gen lY0 = log(y0+1)
+	ren y1 Y1
+	ren y0 Y0
+	gen DY 		= Y1 - Y0
+	gen lY1e 	= log(Y1)
+	gen lY1 	= log(Y1)
+	replace lY1 = 0 if lY1 == .
 	ren Q_tmp Q
 	ren R_tmp R
-}
-estim_RE Y1 D Q R gdum*
-estim_RE YD D Q R gdum*
-estim_RE lY1e D Q R gdum*
-
-qui{
+	
+	/* vars to estimate DD */
 	drop S*
 	merge 1:1 i using Z0_tmp
 	drop if _merge != 3
 	drop _merge
-
-	gen DY 	= y1-y0
-	gen DlY = log(y1+1)-log(y0+1)
 	ren S_tmp S
 	gen RS = R-S
 }
-estim_PT DY D Q RS gdum*
-estim_PT DlY D Q RS gdum*
+
+estim_RE Y1 D Q R gdum* YD, `cl'
+estim_RE lY1 D Q R gdum* YD, `cl'
+estim_RE lY1e D Q R gdum* , `cl'
 
 cap erase Z0_tmp.dta
 cap erase Z1_tmp.dta
-
-
-
-
