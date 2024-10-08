@@ -1,6 +1,6 @@
 clear all
 
-cd "E:\Dropbox\Research\Projects\Topic 3 NDiD (JMP)\Replication Package\Empirical Illustration"
+cd "`c(pwd)'"
 qui do dofiles/def_estim.do
 
 qui{
